@@ -13,40 +13,53 @@ st.set_page_config(
     layout="wide"
 )
 
-MODEL_PATH = "best_xgb_model.pkl"
-SCALER_PATH = "scaler(1).pkl"
-MLP_PATH = "weighted_mlp_model.keras"
+XGB_MODEL_PATH = "xgboost_model.pkl"
+LGB_MODEL_PATH = "lightgbm_model.pkl"
+SCALER_PATH = "scaler(2).pkl"
+FEATURE_COLUMNS_PATH = "feature_columns.pkl"
 
 try:
-    xgb_model = joblib.load(MODEL_PATH)
+    xgb_model = joblib.load(XGB_MODEL_PATH)
+    lgb_model = joblib.load(LGB_MODEL_PATH)
     scaler = joblib.load(SCALER_PATH)
-    import tensorflow as tf
-    mlp_model = tf.keras.models.load_model(MLP_PATH)
+    feature_columns = joblib.load(FEATURE_COLUMNS_PATH)
     models_loaded = True
 except Exception as e:
     models_loaded = False
 
 def create_feature_vector(geo_deviation, txn_frequency, acc_fluctuation, device_risk, amount):
-    feature_names = [f'V{i}' for i in range(1, 29)] + ['Amount', 'Time']
     base_features = np.zeros(30)
-    base_features[13] = geo_deviation
-    base_features[3] = txn_frequency
-    base_features[9] = acc_fluctuation
+    base_features[1] = 0.0
+    base_features[4] = txn_frequency
+    base_features[10] = acc_fluctuation
+    base_features[12] = 0.0
+    base_features[14] = geo_deviation
     base_features[11] = device_risk
-    base_features[28] = amount
-    base_features[29] = 100000
-    return base_features.reshape(1, -1), feature_names
+    base_features[29] = amount
+    return base_features.reshape(1, -1), feature_columns
 
-def predict_risk(features):
-    features_scaled = scaler.transform(features)
+def predict_risk(features, student_type):
+    features_scaled = features.copy()
+    features_scaled[:, [0, 29]] = scaler.transform(features[:, [0, 29]])
+    
     xgb_proba = xgb_model.predict_proba(features_scaled)[0][1]
-    mlp_proba = mlp_model.predict(features_scaled, verbose=0)[0][0]
-    mlp_proba = float(np.clip(mlp_proba, 0, 1))
-    return xgb_proba, mlp_proba
+    
+    if student_type == "本科生":
+        weight = 1.2
+    elif student_type == "硕士研究生":
+        weight = 1.0
+    else:
+        weight = 0.8
+    
+    xgb_proba = min(1.0, xgb_proba * weight)
+    
+    return xgb_proba, 0.0
 
 def generate_shap_explanation(features):
+    features_scaled = features.copy()
+    features_scaled[:, [0, 29]] = scaler.transform(features[:, [0, 29]])
     explainer = shap.TreeExplainer(xgb_model)
-    shap_values = explainer.shap_values(scaler.transform(features))
+    shap_values = explainer.shap_values(features_scaled)
     if isinstance(shap_values, list):
         shap_values = shap_values[1]
     return shap_values[0]
@@ -79,14 +92,23 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-header">🛡️ Campus Shield</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">大学生信用卡智能风控与决策分析平台 | 基于集成学习与深度学习双引擎的风险感知系统</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-header">🎓 Campus Shield</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">大学生金融安全智能助手 | 基于身份画像的个性化风险感知系统</p>', unsafe_allow_html=True)
 
 if not models_loaded:
     st.error("⚠️ 模型文件加载失败，请检查模型文件是否存在。")
     st.stop()
 
 with st.sidebar:
+    st.header("👤 身份信息")
+    student_type = st.selectbox(
+        "学生类别",
+        ["本科生", "硕士研究生", "博士研究生"],
+        index=0,
+        help="不同学段的消费行为基准不同"
+    )
+    
+    st.markdown("---")
     st.header("📋 场景选择")
     scenario = st.selectbox(
         "选择预设场景",
@@ -146,6 +168,25 @@ col1, col2, col3 = st.columns([1, 2, 1])
 
 with col1:
     st.subheader("📌 业务语义映射")
+    
+    if student_type == "本科生":
+        risk_weight = "1.2 (较高)"
+        explanation = "本科生消费能力较低，对异常波动更敏感"
+    elif student_type == "硕士研究生":
+        risk_weight = "1.0 (基准)"
+        explanation = "硕士生消费能力中等，采用基准评估"
+    else:
+        risk_weight = "0.8 (较低)"
+        explanation = "博士生可能有助研费，消费容忍度较高"
+    
+    st.info(f"""
+    **学生身份：** {student_type}
+    
+    **风险评估权重：** {risk_weight}
+    
+    **评估逻辑：** {explanation}
+    """)
+    
     st.info(f"""
     **当前参数映射：**
     - V14 → 地理位置偏离度: {geo_deviation}
@@ -159,8 +200,8 @@ with col2:
     features, feature_names = create_feature_vector(
         geo_deviation, txn_frequency, acc_fluctuation, device_risk, amount
     )
-    xgb_prob, mlp_prob = predict_risk(features)
-    ensemble_prob = 0.5 * xgb_prob + 0.5 * mlp_prob
+    xgb_prob, _ = predict_risk(features, student_type)
+    ensemble_prob = xgb_prob
     
     risk_level = "低" if ensemble_prob < 0.3 else "中" if ensemble_prob < 0.7 else "高"
     risk_color = "🟢" if ensemble_prob < 0.3 else "🟡" if ensemble_prob < 0.7 else "🔴"
@@ -174,39 +215,23 @@ with col2:
     </div>
     """, unsafe_allow_html=True)
     
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("XGBoost 风险概率", f"{xgb_prob*100:.1f}%", delta_color="inverse")
-    with c2:
-        st.metric("MLP 风险概率", f"{mlp_prob*100:.1f}%", delta_color="inverse")
+    st.metric("XGBoost 风险概率", f"{xgb_prob*100:.1f}%", delta_color="inverse")
 
 with col3:
     st.subheader("⏱️ 检测信息")
     st.metric("检测耗时", "12 ms")
     st.metric("特征维度", "30")
-    st.success("✓ 双引擎运行正常")
+    st.success("✓ XGBoost引擎运行正常")
 
 st.markdown("---")
 
-col_left, col_right = st.columns(2)
-
-with col_left:
-    st.subheader("🔍 XGBoost 决策结果")
-    if xgb_prob < 0.3:
-        st.success("🟢 **建议：自动放行**\n\n该笔交易各项指标正常，风险可控。")
-    elif xgb_prob < 0.7:
-        st.warning("🟡 **建议：二次核实**\n\n建议进行短信验证码或人脸识别验证。")
-    else:
-        st.error("🔴 **建议：实时拦截**\n\n高风险交易，已自动拦截并生成预警。")
-
-with col_right:
-    st.subheader("🧠 MLP 决策结果")
-    if mlp_prob < 0.3:
-        st.success("🟢 **建议：自动放行**\n\n神经网络判定为安全交易。")
-    elif mlp_prob < 0.7:
-        st.warning("🟡 **建议：二次核实**\n\n建议进行短信验证码或人脸识别验证。")
-    else:
-        st.error("🔴 **建议：实时拦截**\n\n神经网络检测到异常，已实时拦截。")
+st.subheader("🔍 XGBoost 决策结果")
+if xgb_prob < 0.3:
+    st.success("🟢 **建议：自动放行**\n\n该笔交易各项指标正常，风险可控。")
+elif xgb_prob < 0.7:
+    st.warning("🟡 **建议：二次核实**\n\n建议进行短信验证码或人脸识别验证。")
+else:
+    st.error("🔴 **建议：实时拦截**\n\n高风险交易，已自动拦截并生成预警。")
 
 st.markdown("---")
 
@@ -214,28 +239,32 @@ st.subheader("📊 SHAP 风险归因解释 (XAI)")
 shap_values = generate_shap_explanation(features)
 
 feature_mapping = {
-    'V14': '地理位置偏离度',
-    'V4': '近期交易频率', 
-    'V10': '账户异常波动',
-    'V12': '设备环境风险'
+    'Time': 'Transaction Time',
+    'V14': 'Geographical Location Deviation',
+    'V4': 'Recent Transaction Frequency',
+    'V10': 'Account Abnormal Fluctuation',
+    'V12': 'Device Environment Risk',
+    'Amount': 'Transaction Amount'
 }
 
 top_features = []
 for idx in np.argsort(np.abs(shap_values))[::-1][:4]:
-    if idx < 28:
-        feature_name = f'V{idx+1}'
+    if idx < len(feature_columns):
+        feature_name = feature_columns[idx]
         display_name = feature_mapping.get(feature_name, feature_name)
         contribution = shap_values[idx]
         top_features.append((display_name, contribution, abs(contribution)))
 
-total_contribution = sum([f[2] for f in top_features]) if total_contribution := sum([f[2] for f in top_features]) > 0 else 1
+total_contribution = sum([f[2] for f in top_features])
+if total_contribution == 0:
+    total_contribution = 1
 
 fig, ax = plt.subplots(figsize=(10, 5))
 colors = ['#eb3349' if v > 0 else '#38ef7d' for _, v, _ in top_features]
 bars = ax.barh([f[0] for f in top_features], [f[1]*100 for f in top_features], color=colors)
 ax.axvline(x=0, color='black', linewidth=0.5)
-ax.set_xlabel('SHAP Value (风险贡献度)', fontsize=12)
-ax.set_title('各特征对风险预测的贡献', fontsize=14, fontweight='bold')
+ax.set_xlabel('SHAP Value (Risk Contribution)', fontsize=12)
+ax.set_title('Feature Contribution to Risk Prediction', fontsize=14, fontweight='bold')
 
 for i, (name, val, _) in enumerate(top_features):
     ax.text(val*100 + (0.5 if val > 0 else -0.5), i, f'{val*100:.1f}%', 
@@ -284,8 +313,7 @@ else:
 with st.expander("📝 技术说明"):
     st.markdown("""
     - **XGBoost**：梯度提升树模型，擅长捕捉非线性关系
-    - **MLP**：多层感知机神经网络，深度学习引擎
-    - **Ensemble**：XGBoost与MLP的加权平均 (50:50)
+    - **特征维度**：30维 (Time + V1-V28 + Amount)
     - **SHAP**：基于博弈论的特征归因方法
-    - **数据预处理**：所有输入特征已通过StandardScaler标准化
+    - **数据预处理**：Time和Amount特征已通过StandardScaler标准化
     """)

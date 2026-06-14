@@ -29,11 +29,13 @@ except Exception as e:
 
 def create_feature_vector(geo_deviation, txn_frequency, acc_fluctuation, device_risk, amount):
     base_features = np.zeros(30)
-    base_features[4] = txn_frequency    # V4
-    base_features[10] = acc_fluctuation # V10
-    base_features[12] = device_risk     # V12 ← 修正：从 11 改为 12
-    base_features[14] = geo_deviation   # V14
-    base_features[29] = amount          # Amount
+    base_features[1] = 0.0
+    base_features[4] = txn_frequency
+    base_features[10] = acc_fluctuation
+    base_features[12] = 0.0
+    base_features[14] = geo_deviation
+    base_features[11] = device_risk
+    base_features[29] = amount
     return base_features.reshape(1, -1), feature_columns
 
 def predict_risk(features, student_type):
@@ -329,8 +331,6 @@ else:
 with st.expander("📝 技术说明"):
     st.markdown("""
     - **XGBoost**：梯度提升树模型，擅长捕捉非线性关系
-    - **LightGBM**：轻量级梯度提升树模型，训练速度快，内存占用低
-    - **Ensemble**：XGBoost与LightGBM的加权平均 (50:50)
     - **特征维度**：30维 (Time + V1-V28 + Amount)
     - **SHAP**：基于博弈论的特征归因方法
     - **数据预处理**：Time和Amount特征已通过StandardScaler标准化

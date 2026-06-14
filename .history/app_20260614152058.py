@@ -29,11 +29,13 @@ except Exception as e:
 
 def create_feature_vector(geo_deviation, txn_frequency, acc_fluctuation, device_risk, amount):
     base_features = np.zeros(30)
-    base_features[4] = txn_frequency    # V4
-    base_features[10] = acc_fluctuation # V10
-    base_features[12] = device_risk     # V12 ← 修正：从 11 改为 12
-    base_features[14] = geo_deviation   # V14
-    base_features[29] = amount          # Amount
+    base_features[1] = 0.0
+    base_features[4] = txn_frequency
+    base_features[10] = acc_fluctuation
+    base_features[12] = 0.0
+    base_features[14] = geo_deviation
+    base_features[11] = device_risk
+    base_features[29] = amount
     return base_features.reshape(1, -1), feature_columns
 
 def predict_risk(features, student_type):
@@ -200,8 +202,8 @@ with col2:
     features, feature_names = create_feature_vector(
         geo_deviation, txn_frequency, acc_fluctuation, device_risk, amount
     )
-    xgb_prob, lgb_prob = predict_risk(features, student_type)
-    ensemble_prob = 0.5 * xgb_prob + 0.5 * lgb_prob
+    xgb_prob, _ = predict_risk(features, student_type)
+    ensemble_prob = xgb_prob
     
     risk_level = "低" if ensemble_prob < 0.3 else "中" if ensemble_prob < 0.7 else "高"
     risk_color = "🟢" if ensemble_prob < 0.3 else "🟡" if ensemble_prob < 0.7 else "🔴"
@@ -215,39 +217,23 @@ with col2:
     </div>
     """, unsafe_allow_html=True)
     
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("XGBoost 风险概率", f"{xgb_prob*100:.1f}%", delta_color="inverse")
-    with c2:
-        st.metric("LightGBM 风险概率", f"{lgb_prob*100:.1f}%", delta_color="inverse")
+    st.metric("XGBoost 风险概率", f"{xgb_prob*100:.1f}%", delta_color="inverse")
 
 with col3:
     st.subheader("⏱️ 检测信息")
     st.metric("检测耗时", "12 ms")
     st.metric("特征维度", "30")
-    st.success("✓ 双引擎运行正常")
+    st.success("✓ XGBoost引擎运行正常")
 
 st.markdown("---")
 
-col_left, col_right = st.columns(2)
-
-with col_left:
-    st.subheader("🔍 XGBoost 决策结果")
-    if xgb_prob < 0.3:
-        st.success("🟢 **建议：自动放行**\n\n该笔交易各项指标正常，风险可控。")
-    elif xgb_prob < 0.7:
-        st.warning("🟡 **建议：二次核实**\n\n建议进行短信验证码或人脸识别验证。")
-    else:
-        st.error("🔴 **建议：实时拦截**\n\n高风险交易，已自动拦截并生成预警。")
-
-with col_right:
-    st.subheader("🌲 LightGBM 决策结果")
-    if lgb_prob < 0.3:
-        st.success("🟢 **建议：自动放行**\n\nLightGBM判定为安全交易。")
-    elif lgb_prob < 0.7:
-        st.warning("🟡 **建议：二次核实**\n\n建议进行短信验证码或人脸识别验证。")
-    else:
-        st.error("🔴 **建议：实时拦截**\n\nLightGBM检测到异常，已实时拦截。")
+st.subheader("🔍 XGBoost 决策结果")
+if xgb_prob < 0.3:
+    st.success("🟢 **建议：自动放行**\n\n该笔交易各项指标正常，风险可控。")
+elif xgb_prob < 0.7:
+    st.warning("🟡 **建议：二次核实**\n\n建议进行短信验证码或人脸识别验证。")
+else:
+    st.error("🔴 **建议：实时拦截**\n\n高风险交易，已自动拦截并生成预警。")
 
 st.markdown("---")
 
@@ -329,8 +315,6 @@ else:
 with st.expander("📝 技术说明"):
     st.markdown("""
     - **XGBoost**：梯度提升树模型，擅长捕捉非线性关系
-    - **LightGBM**：轻量级梯度提升树模型，训练速度快，内存占用低
-    - **Ensemble**：XGBoost与LightGBM的加权平均 (50:50)
     - **特征维度**：30维 (Time + V1-V28 + Amount)
     - **SHAP**：基于博弈论的特征归因方法
     - **数据预处理**：Time和Amount特征已通过StandardScaler标准化

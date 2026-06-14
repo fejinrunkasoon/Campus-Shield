@@ -13,40 +13,51 @@ st.set_page_config(
     layout="wide"
 )
 
-MODEL_PATH = "best_xgb_model.pkl"
-SCALER_PATH = "scaler(1).pkl"
-MLP_PATH = "weighted_mlp_model.keras"
+MODEL_PATH = "xgboost_model.pkl"
+SCALER_PATH = "scaler(2).pkl"
+FEATURE_COLUMNS_PATH = "feature_columns.pkl"
 
 try:
     xgb_model = joblib.load(MODEL_PATH)
     scaler = joblib.load(SCALER_PATH)
-    import tensorflow as tf
-    mlp_model = tf.keras.models.load_model(MLP_PATH)
+    feature_columns = joblib.load(FEATURE_COLUMNS_PATH)
     models_loaded = True
 except Exception as e:
     models_loaded = False
 
 def create_feature_vector(geo_deviation, txn_frequency, acc_fluctuation, device_risk, amount):
-    feature_names = [f'V{i}' for i in range(1, 29)] + ['Amount', 'Time']
     base_features = np.zeros(30)
-    base_features[13] = geo_deviation
-    base_features[3] = txn_frequency
-    base_features[9] = acc_fluctuation
+    base_features[1] = 0.0
+    base_features[4] = txn_frequency
+    base_features[10] = acc_fluctuation
+    base_features[12] = 0.0
+    base_features[14] = geo_deviation
     base_features[11] = device_risk
-    base_features[28] = amount
-    base_features[29] = 100000
-    return base_features.reshape(1, -1), feature_names
+    base_features[29] = amount
+    return base_features.reshape(1, -1), feature_columns
 
-def predict_risk(features):
-    features_scaled = scaler.transform(features)
+def predict_risk(features, student_type):
+    features_scaled = features.copy()
+    features_scaled[:, [0, 29]] = scaler.transform(features[:, [0, 29]])
+    
     xgb_proba = xgb_model.predict_proba(features_scaled)[0][1]
-    mlp_proba = mlp_model.predict(features_scaled, verbose=0)[0][0]
-    mlp_proba = float(np.clip(mlp_proba, 0, 1))
-    return xgb_proba, mlp_proba
+    
+    if student_type == "本科生":
+        weight = 1.2
+    elif student_type == "硕士研究生":
+        weight = 1.0
+    else:
+        weight = 0.8
+    
+    xgb_proba = min(1.0, xgb_proba * weight)
+    
+    return xgb_proba, 0.0
 
 def generate_shap_explanation(features):
+    amount_scaled = scaler.transform(features[:, -1:])
+    features_for_model = np.hstack([features[:, :-1], amount_scaled])
     explainer = shap.TreeExplainer(xgb_model)
-    shap_values = explainer.shap_values(scaler.transform(features))
+    shap_values = explainer.shap_values(features_for_model)
     if isinstance(shap_values, list):
         shap_values = shap_values[1]
     return shap_values[0]
@@ -79,14 +90,23 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-header">🛡️ Campus Shield</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">大学生信用卡智能风控与决策分析平台 | 基于集成学习与深度学习双引擎的风险感知系统</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-header">🎓 Campus Shield</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">大学生金融安全智能助手 | 基于身份画像的个性化风险感知系统</p>', unsafe_allow_html=True)
 
 if not models_loaded:
     st.error("⚠️ 模型文件加载失败，请检查模型文件是否存在。")
     st.stop()
 
 with st.sidebar:
+    st.header("👤 身份信息")
+    student_type = st.selectbox(
+        "学生类别",
+        ["本科生", "硕士研究生", "博士研究生"],
+        index=0,
+        help="不同学段的消费行为基准不同"
+    )
+    
+    st.markdown("---")
     st.header("📋 场景选择")
     scenario = st.selectbox(
         "选择预设场景",
@@ -146,6 +166,25 @@ col1, col2, col3 = st.columns([1, 2, 1])
 
 with col1:
     st.subheader("📌 业务语义映射")
+    
+    if student_type == "本科生":
+        risk_weight = "1.2 (较高)"
+        explanation = "本科生消费能力较低，对异常波动更敏感"
+    elif student_type == "硕士研究生":
+        risk_weight = "1.0 (基准)"
+        explanation = "硕士生消费能力中等，采用基准评估"
+    else:
+        risk_weight = "0.8 (较低)"
+        explanation = "博士生可能有助研费，消费容忍度较高"
+    
+    st.info(f"""
+    **学生身份：** {student_type}
+    
+    **风险评估权重：** {risk_weight}
+    
+    **评估逻辑：** {explanation}
+    """)
+    
     st.info(f"""
     **当前参数映射：**
     - V14 → 地理位置偏离度: {geo_deviation}
@@ -159,7 +198,7 @@ with col2:
     features, feature_names = create_feature_vector(
         geo_deviation, txn_frequency, acc_fluctuation, device_risk, amount
     )
-    xgb_prob, mlp_prob = predict_risk(features)
+    xgb_prob, mlp_prob = predict_risk(features, student_type)
     ensemble_prob = 0.5 * xgb_prob + 0.5 * mlp_prob
     
     risk_level = "低" if ensemble_prob < 0.3 else "中" if ensemble_prob < 0.7 else "高"
@@ -214,10 +253,10 @@ st.subheader("📊 SHAP 风险归因解释 (XAI)")
 shap_values = generate_shap_explanation(features)
 
 feature_mapping = {
-    'V14': '地理位置偏离度',
-    'V4': '近期交易频率', 
-    'V10': '账户异常波动',
-    'V12': '设备环境风险'
+    'V14': 'Geographical Location Deviation',
+    'V4': 'Recent Transaction Frequency',
+    'V10': 'Account Abnormal Fluctuation',
+    'V12': 'Device Environment Risk'
 }
 
 top_features = []
@@ -236,8 +275,8 @@ fig, ax = plt.subplots(figsize=(10, 5))
 colors = ['#eb3349' if v > 0 else '#38ef7d' for _, v, _ in top_features]
 bars = ax.barh([f[0] for f in top_features], [f[1]*100 for f in top_features], color=colors)
 ax.axvline(x=0, color='black', linewidth=0.5)
-ax.set_xlabel('SHAP Value (风险贡献度)', fontsize=12)
-ax.set_title('各特征对风险预测的贡献', fontsize=14, fontweight='bold')
+ax.set_xlabel('SHAP Value (Risk Contribution)', fontsize=12)
+ax.set_title('Feature Contribution to Risk Prediction', fontsize=14, fontweight='bold')
 
 for i, (name, val, _) in enumerate(top_features):
     ax.text(val*100 + (0.5 if val > 0 else -0.5), i, f'{val*100:.1f}%', 

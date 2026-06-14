@@ -29,11 +29,13 @@ except Exception as e:
 
 def create_feature_vector(geo_deviation, txn_frequency, acc_fluctuation, device_risk, amount):
     base_features = np.zeros(30)
-    base_features[4] = txn_frequency    # V4
-    base_features[10] = acc_fluctuation # V10
-    base_features[12] = device_risk     # V12 ← 修正：从 11 改为 12
-    base_features[14] = geo_deviation   # V14
-    base_features[29] = amount          # Amount
+    base_features[1] = 0.0
+    base_features[4] = txn_frequency
+    base_features[10] = acc_fluctuation
+    base_features[12] = 0.0
+    base_features[14] = geo_deviation
+    base_features[11] = device_risk
+    base_features[29] = amount
     return base_features.reshape(1, -1), feature_columns
 
 def predict_risk(features, student_type):
